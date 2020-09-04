@@ -409,6 +409,7 @@ TEST(WalletZkeysTest, WriteCryptedzkeyDirectToDb) {
     wallet2.GetSproutSpendingKey(paymentAddress2, keyOut);
     ASSERT_EQ(paymentAddress2, keyOut.address());
 }
+*/
 
 /**
  * This test covers methods on CWalletDB to load/save crypted sapling z keys.
