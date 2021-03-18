@@ -916,6 +916,19 @@ CAmount CCoinsViewCache::GetValueIn(const CTransaction& tx) const
     return nResult;
 }
 
+CAmount CCoinsViewCache::GetTransparentValueIn(const CTransaction& tx) const
+{
+    if (tx.IsCoinBase())
+        return 0;
+
+    CAmount nResult = 0;
+    for (unsigned int i = 0; i < tx.vin.size(); i++)
+        nResult += GetOutputFor(tx.vin[i]).nValue;
+
+    return nResult;
+}
+
+
 std::optional<UnsatisfiedShieldedReq> CCoinsViewCache::HaveShieldedRequirements(const CTransaction& tx) const
 {
     boost::unordered_map<uint256, SproutMerkleTree, SaltedTxidHasher> intermediates;

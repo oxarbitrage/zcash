@@ -257,6 +257,7 @@ UniValue blockToJSON(const CBlock& block, const CBlockIndex* blockindex, bool tx
     UniValue valuePools(UniValue::VARR);
     valuePools.push_back(ValuePoolDesc("sprout", blockindex->nChainSproutValue, blockindex->nSproutValue));
     valuePools.push_back(ValuePoolDesc("sapling", blockindex->nChainSaplingValue, blockindex->nSaplingValue));
+    valuePools.push_back(ValuePoolDesc("transparent", blockindex->nChainTransparentValue, blockindex->nTransparentValue));
     result.pushKV("valuePools", valuePools);
 
     if (blockindex->pprev)
@@ -1004,6 +1005,14 @@ UniValue getblockchaininfo(const UniValue& params, bool fHelp)
             "  \"chainwork\": \"xxxx\"     (string) total amount of work in active chain, in hexadecimal\n"
             "  \"size_on_disk\": xxxxxx,       (numeric) the estimated size of the block and undo files on disk\n"
             "  \"commitments\": xxxxxx,    (numeric) the current number of note commitments in the commitment tree\n"
+            "  \"valuePools\": [            (array) information of each value pool\n"
+            "      {\n"
+            "          \"id\": \"xxxx\",            (numeric) name of the pool\n"
+            "          \"monitored\": xx,           (boolean) true if the pool is being monitored\n"
+            "          \"chainValue\": xxxxxx,      (numeric) amount in the pool\n"
+            "          \"chainValueZat\": xxxxxx,   (numeric) amount in the pool in satoshis\n"
+            "      }, ...\n"
+            "  ]\n"
             "  \"softforks\": [            (array) status of softforks in progress\n"
             "     {\n"
             "        \"id\": \"xxxx\",        (string) name of softfork\n"
@@ -1062,6 +1071,7 @@ UniValue getblockchaininfo(const UniValue& params, bool fHelp)
     UniValue valuePools(UniValue::VARR);
     valuePools.push_back(ValuePoolDesc("sprout", tip->nChainSproutValue, std::nullopt));
     valuePools.push_back(ValuePoolDesc("sapling", tip->nChainSaplingValue, std::nullopt));
+    valuePools.push_back(ValuePoolDesc("transparent", tip->nChainTransparentValue, std::nullopt));
     obj.pushKV("valuePools",            valuePools);
 
     const CChainParams& chainparams = Params();

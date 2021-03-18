@@ -561,6 +561,7 @@ bool CBlockTreeDB::LoadBlockIndexGuts(
                 pindexNew->nSaplingValue  = diskindex.nSaplingValue;
                 pindexNew->hashFinalSaplingRoot = diskindex.hashFinalSaplingRoot;
                 pindexNew->hashChainHistoryRoot = diskindex.hashChainHistoryRoot;
+                pindexNew->nTransparentValue = diskindex.nTransparentValue;
 
                 // Consistency checks
                 auto header = pindexNew->GetBlockHeader();

@@ -3826,6 +3826,9 @@ bool ReceivedBlockTransactions(
     pindexNew->nChainSproutValue = std::nullopt;
     pindexNew->nSaplingValue = saplingValue;
     pindexNew->nChainSaplingValue = std::nullopt;
+    // We can't determine this value until all parents are BLOCK_VALID_TRANSACTIONS.
+    pindexNew->nTransparentValue = std::nullopt;
+    pindexNew->nChainTransparentValue = std::nullopt;
     pindexNew->nFile = pos.nFile;
     pindexNew->nDataPos = pos.nPos;
     pindexNew->nUndoPos = 0;
@@ -3837,6 +3840,8 @@ bool ReceivedBlockTransactions(
         // If pindexNew is the genesis block or all parents are BLOCK_VALID_TRANSACTIONS.
         deque<CBlockIndex*> queue;
         queue.push_back(pindexNew);
+
+        CCoinsViewCache view(pcoinsTip);
 
         // Recursively process any descendant blocks that now may be eligible to be connected.
         while (!queue.empty()) {
@@ -3854,9 +3859,34 @@ bool ReceivedBlockTransactions(
                 } else {
                     pindex->nChainSaplingValue = std::nullopt;
                 }
+
+                // Given that all parents are BLOCK_VALID_TRANSACTIONS, we now should be
+                // able to calculate this block's net transparent value, assuming the
+                // block is correct.
+                CAmount transparentValue = 0;
+                for (auto tx : block.vtx) {
+                    for (auto out : tx.vout) {
+                        transparentValue += out.nValue;
+                    }
+                    if (view.HaveInputs(tx)) {
+                        transparentValue -= view.GetTransparentValueIn(tx);
+                    } else {
+                        // Some of the inputs are inaccessible; this might be a block from
+                        // a fork that spends coins also spent in the current chain. Fall
+                        // back to directly looking up the transactions.
+                        // TODO
+                    }
+                }
+                pindex->nTransparentValue = transparentValue;
+                if (pindex->pprev->nChainTransparentValue) {
+                    pindex->nChainTransparentValue = *pindex->pprev->nChainTransparentValue + transparentValue;
+                } else {
+                    pindex->nChainTransparentValue = std::nullopt;
+                }
             } else {
                 pindex->nChainSproutValue = pindex->nSproutValue;
                 pindex->nChainSaplingValue = pindex->nSaplingValue;
+                pindex->nChainTransparentValue = pindex->nTransparentValue;
             }
 
             // Fall back to hardcoded Sprout value pool balance
@@ -4599,16 +4629,25 @@ bool static LoadBlockIndexDB(const CChainParams& chainparams)
                     } else {
                         pindex->nChainSaplingValue = std::nullopt;
                     }
+
+                    if (pindex->pprev->nChainTransparentValue && pindex->nTransparentValue) {
+                        pindex->nChainTransparentValue = *pindex->pprev->nChainTransparentValue + *pindex->nTransparentValue;
+                    } else {
+                        pindex->nChainTransparentValue = std::nullopt;
+                    }
+
                 } else {
                     pindex->nChainTx = 0;
                     pindex->nChainSproutValue = std::nullopt;
                     pindex->nChainSaplingValue = std::nullopt;
+                    pindex->nChainTransparentValue = std::nullopt;
                     mapBlocksUnlinked.insert(std::make_pair(pindex->pprev, pindex));
                 }
             } else {
                 pindex->nChainTx = pindex->nTx;
                 pindex->nChainSproutValue = pindex->nSproutValue;
                 pindex->nChainSaplingValue = pindex->nSaplingValue;
+                pindex->nChainTransparentValue = pindex->nTransparentValue;
             }
 
             // Fall back to hardcoded Sprout value pool balance

@@ -18,6 +18,7 @@
 static const int SPROUT_VALUE_VERSION = 1001400;
 static const int SAPLING_VALUE_VERSION = 1010100;
 static const int CHAIN_HISTORY_ROOT_VERSION = 2010200;
+static const int TRANSPARENT_VALUE_VERSION = 4040000;
 
 /**
  * Maximum amount of time that a block timestamp is allowed to be ahead of the
@@ -271,6 +272,15 @@ public:
     //!   always equal to hashLightClientRoot.
     uint256 hashChainHistoryRoot;
 
+    //! Change in value held by the Transparent circuit over this block.
+    //! Will be nullopt for older blocks on old nodes until a reindex has taken place.
+    std::optional<CAmount> nTransparentValue;
+
+    //! (memory only) Total value held by the Transparent circuit up to and including this block.
+    //! Will be nullopt for old nodes until a reindex has taken place.
+    //! Will be nullopt if nChainTx is zero.
+    std::optional<CAmount> nChainTransparentValue;
+
     //! block header
     int nVersion;
     uint256 hashMerkleRoot;
@@ -304,6 +314,8 @@ public:
         nChainSproutValue = std::nullopt;
         nSaplingValue = 0;
         nChainSaplingValue = std::nullopt;
+        nTransparentValue = std::nullopt;
+        nChainTransparentValue = std::nullopt;
 
         nVersion       = 0;
         hashMerkleRoot = uint256();
@@ -513,6 +525,12 @@ public:
             // For block indices written before the client was Heartwood-aware,
             // these are always identical.
             hashFinalSaplingRoot = hashLightClientRoot;
+        }
+
+        // Only read/write nTransparentValue if the client version used to create
+        // this index was storing them.
+        if ((s.GetType() & SER_DISK) && (nVersion >= TRANSPARENT_VALUE_VERSION)) {
+            READWRITE(nTransparentValue);
         }
 
         // If you have just added new serialized fields above, remember to add
