@@ -3848,6 +3848,26 @@ bool ReceivedBlockTransactions(
             CBlockIndex *pindex = queue.front();
             queue.pop_front();
             pindex->nChainTx = (pindex->pprev ? pindex->pprev->nChainTx : 0) + pindex->nTx;
+
+            // Given that all parents are BLOCK_VALID_TRANSACTIONS, we now should be
+            // able to calculate this block's net transparent value, assuming the
+            // block is correct.
+            CAmount transparentValue = 0;
+            for (auto& tx : block.vtx) {
+                for (auto& out : tx.vout) {
+                    transparentValue += out.nValue;
+                }
+                if (view.HaveInputs(tx)) {
+                    transparentValue -= view.GetTransparentValueIn(tx);
+                } else {
+                    // Some of the inputs are inaccessible; this might be a block from
+                    // a fork that spends coins also spent in the current chain. Fall
+                    // back to directly looking up the transactions.
+                    // TODO
+                }
+            }
+            pindex->nTransparentValue = transparentValue;
+
             if (pindex->pprev) {
                 if (pindex->pprev->nChainSproutValue && pindex->nSproutValue) {
                     pindex->nChainSproutValue = *pindex->pprev->nChainSproutValue + *pindex->nSproutValue;
@@ -3860,24 +3880,6 @@ bool ReceivedBlockTransactions(
                     pindex->nChainSaplingValue = std::nullopt;
                 }
 
-                // Given that all parents are BLOCK_VALID_TRANSACTIONS, we now should be
-                // able to calculate this block's net transparent value, assuming the
-                // block is correct.
-                CAmount transparentValue = 0;
-                for (auto& tx : block.vtx) {
-                    for (auto& out : tx.vout) {
-                        transparentValue += out.nValue;
-                    }
-                    if (view.HaveInputs(tx)) {
-                        transparentValue -= view.GetTransparentValueIn(tx);
-                    } else {
-                        // Some of the inputs are inaccessible; this might be a block from
-                        // a fork that spends coins also spent in the current chain. Fall
-                        // back to directly looking up the transactions.
-                        // TODO
-                    }
-                }
-                pindex->nTransparentValue = transparentValue;
                 if (pindex->pprev->nChainTransparentValue) {
                     pindex->nChainTransparentValue = *pindex->pprev->nChainTransparentValue + transparentValue;
                 } else {
