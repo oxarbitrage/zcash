@@ -3864,8 +3864,8 @@ bool ReceivedBlockTransactions(
                 // able to calculate this block's net transparent value, assuming the
                 // block is correct.
                 CAmount transparentValue = 0;
-                for (auto tx : block.vtx) {
-                    for (auto out : tx.vout) {
+                for (auto& tx : block.vtx) {
+                    for (auto& out : tx.vout) {
                         transparentValue += out.nValue;
                     }
                     if (view.HaveInputs(tx)) {
