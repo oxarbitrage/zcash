@@ -14,9 +14,10 @@ import shutil
 import tempfile
 import traceback
 
-from .authproxy import JSONRPCException
+from .proxy import JSONRPCException
 from .util import (
-    ZCASHD_BINARY,
+    stop_wallets,
+    zcashd_binary,
     initialize_chain,
     start_nodes,
     connect_nodes_bi,
@@ -36,6 +37,7 @@ class BitcoinTestFramework(object):
         self.num_nodes = 4
         self.cache_behavior = 'current'
         self.nodes = None
+        self.wallets = None
 
     def run_test(self):
         raise NotImplementedError
@@ -159,6 +161,13 @@ class BitcoinTestFramework(object):
         except KeyboardInterrupt as e:
             print("Exiting after " + repr(e))
 
+        print("Stopping wallets")
+        try:
+            if self.wallets:
+                stop_wallets(self.wallets)
+        except Exception as e:
+            print("Ignoring error while stopping wallets: ", repr(e))
+
         if not self.options.noshutdown:
             print("Stopping nodes")
             stop_nodes(self.nodes)
@@ -194,11 +203,11 @@ class ComparisonTestFramework(BitcoinTestFramework):
 
     def add_options(self, parser):
         parser.add_option("--testbinary", dest="testbinary",
-                          default=os.getenv("ZCASHD", ZCASHD_BINARY),
-                          help="zcashd binary to test")
+                          default=os.getenv("CARGO_BIN_EXE_zebrad", zcashd_binary()),
+                          help="zebrad binary to test")
         parser.add_option("--refbinary", dest="refbinary",
-                          default=os.getenv("ZCASHD", ZCASHD_BINARY),
-                          help="zcashd binary to use for reference nodes (if any)")
+                          default=os.getenv("CARGO_BIN_EXE_zebrad", zcashd_binary()),
+                          help="zebrad binary to use for reference nodes (if any)")
 
     def setup_network(self):
         self.nodes = start_nodes(

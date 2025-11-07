@@ -4,228 +4,104 @@
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or https://www.opensource.org/licenses/mit-license.php .
 
-from test_framework.test_framework import BitcoinTestFramework
-from test_framework.authproxy import JSONRPCException
-from test_framework.mininode import COIN
-from test_framework.util import assert_equal, start_nodes, start_node, \
-    connect_nodes_bi, sync_blocks, sync_mempools
-from test_framework.zip317 import conventional_fee
-
 from decimal import Decimal
+import time
 
+from test_framework.test_framework import BitcoinTestFramework
+from test_framework.util import assert_equal, assert_true, start_nodes, start_wallets
+from test_framework.config import ZebraExtraArgs
+
+# Test that we can create a wallet and use an address from it to mine blocks.
 class WalletTest (BitcoinTestFramework):
 
     def __init__(self):
         super().__init__()
         self.cache_behavior = 'clean'
-        self.num_nodes = 4
+        self.num_nodes = 1
 
     def setup_network(self, split=False):
-        self.nodes = start_nodes(3, self.options.tmpdir, extra_args=[[
-            '-allowdeprecated=getnewaddress',
-            '-allowdeprecated=z_getbalance',
-        ]] * 3)
-        connect_nodes_bi(self.nodes,0,1)
-        connect_nodes_bi(self.nodes,1,2)
-        connect_nodes_bi(self.nodes,0,2)
-        self.is_network_split=False
-        self.sync_all()
+        args = [None]
+        self.nodes = start_nodes(self.num_nodes, self.options.tmpdir, args)
+
+        # Zallet needs a block to start
+        self.nodes[0].generate(1)
+
+        self.wallets = start_wallets(self.num_nodes, self.options.tmpdir)
+
+        # TODO: Use `getwalletstatus` in all sync issues
+        # https://github.com/zcash/wallet/issues/316
+        time.sleep(2)
 
     def run_test(self):
-        print("Mining blocks...")
+        # Generate a new account
+        account = self.wallets[0].z_getnewaccount("test_account")
 
-        self.nodes[0].generate(4)
-        self.sync_all()
+        # Get an address for the account
+        address = self.wallets[0].z_getaddressforaccount(account['account_uuid'])
 
-        walletinfo = self.nodes[0].getwalletinfo()
-        assert_equal(Decimal(walletinfo['immature_balance']), Decimal('40'))
-        assert_equal(Decimal(walletinfo['balance']), Decimal('0'))
+        # Get the receivers from the generated unified address
+        receivers = self.wallets[0].z_listunifiedreceivers(address['address'])
 
-        blockchaininfo = self.nodes[0].getblockchaininfo()
-        assert_equal(blockchaininfo['estimatedheight'], 4)
+        # Get the transparent address from the receivers
+        transparent_address = receivers['p2pkh']
 
-        self.sync_all()
-        self.nodes[1].generate(101)
-        self.sync_all()
-
-        assert_equal(Decimal(self.nodes[0].getbalance()), Decimal('40'))
-        assert_equal(Decimal(self.nodes[1].getbalance()), Decimal('10'))
-        assert_equal(Decimal(self.nodes[2].getbalance()), Decimal('0'))
-        assert_equal(Decimal(self.nodes[0].getbalance("*")), Decimal('40'))
-        assert_equal(Decimal(self.nodes[1].getbalance("*")), Decimal('10'))
-        assert_equal(Decimal(self.nodes[2].getbalance("*")), Decimal('0'))
-
-        # Send 21 ZEC from 0 to 2 using sendtoaddress call.
-        # Second transaction will be child of first, and will require a fee
-        self.nodes[0].sendtoaddress(self.nodes[2].getnewaddress(), Decimal('11'))
-        self.nodes[0].sendtoaddress(self.nodes[2].getnewaddress(), Decimal('10'))
-
-        walletinfo = self.nodes[0].getwalletinfo()
-        assert_equal(Decimal(walletinfo['immature_balance']), Decimal('0'))
-
-        blockchaininfo = self.nodes[0].getblockchaininfo()
-        assert_equal(blockchaininfo['estimatedheight'], 105)
-
-        # Have node0 mine a block, thus it will collect its own fee.
-        self.sync_all()
-        self.nodes[0].generate(1)
-        self.sync_all()
-
-        # Have node1 generate 100 blocks (so node0 can recover the fee)
-        self.nodes[1].generate(100)
-        self.sync_all()
-
-        # node0 should end up with 50 ZEC in block rewards plus fees, but
-        # minus the 21 ZEC plus fees sent to node2
-        assert_equal(Decimal(self.nodes[0].getbalance()), Decimal('50') - Decimal('21'))
-        assert_equal(Decimal(self.nodes[2].getbalance()), Decimal('21'))
-        assert_equal(Decimal(self.nodes[0].getbalance("*")), Decimal('50') - Decimal('21'))
-        assert_equal(Decimal(self.nodes[2].getbalance("*")), Decimal('21'))
-
-        # Node0 should have three unspent outputs.
-        # Create a couple of transactions to send them to node2, submit them through
-        # node1, and make sure both node0 and node2 pick them up properly:
-        node0utxos = self.nodes[0].listunspent(1)
-        assert_equal(len(node0utxos), 3)
-
-        # Check 'generated' field of listunspent
-        # Node 0: has one coinbase utxo and two regular utxos
-        assert_equal(sum(int(uxto["generated"] is True) for uxto in node0utxos), 1)
-        # Node 1: has 101 coinbase utxos and no regular utxos
-        node1utxos = self.nodes[1].listunspent(1)
-        assert_equal(len(node1utxos), 101)
-        assert_equal(sum(int(uxto["generated"] is True) for uxto in node1utxos), 101)
-        # Node 2: has no coinbase utxos and two regular utxos
-        node2utxos = self.nodes[2].listunspent(1)
-        assert_equal(len(node2utxos), 2)
-        assert_equal(sum(int(uxto["generated"] is True) for uxto in node2utxos), 0)
-
-        # Catch an attempt to send a transaction with an absurdly high fee.
-        # Send 1.0 ZEC from an utxo of value 10.0 ZEC but don't specify a change output, so then
-        # the change of 9.0 ZEC becomes the fee, which is considered to be absurdly high.
-        inputs = []
-        outputs = {}
-        for utxo in node2utxos:
-            if utxo["amount"] == Decimal("10.0"):
-                break
-        assert_equal(utxo["amount"], Decimal("10.0"))
-        inputs.append({"txid": utxo["txid"], "vout": utxo["vout"]})
-        outputs[self.nodes[2].getnewaddress("")] = Decimal("1.0")
-        raw_tx = self.nodes[2].createrawtransaction(inputs, outputs)
-        signed_tx = self.nodes[2].signrawtransaction(raw_tx)
+        # Stop the wallet
         try:
-            self.nodes[2].sendrawtransaction(signed_tx["hex"])
-        except JSONRPCException as e:
-            errorString = e.error['message']
-        assert_equal(errorString, "256: absurdly-high-fee")
+            self.wallets[0].stop()
+        except Exception as e:
+            print("Ignoring stopping wallet error: ", e)
+        time.sleep(1)
 
-        # create both transactions
-        txns_to_send = []
-        fee = conventional_fee(2)
-        for utxo in node0utxos:
-            inputs = []
-            outputs = {}
-            inputs.append({"txid": utxo["txid"], "vout": utxo["vout"]})
-            outputs[self.nodes[2].getnewaddress("")] = utxo["amount"] - fee
-            raw_tx = self.nodes[0].createrawtransaction(inputs, outputs)
-            txns_to_send.append(self.nodes[0].signrawtransaction(raw_tx))
+        # Stop the node
+        self.nodes[0].stop()
+        time.sleep(1)
 
-        # Have node 1 (miner) send the transactions
-        self.nodes[1].sendrawtransaction(txns_to_send[0]["hex"], True)
-        self.nodes[1].sendrawtransaction(txns_to_send[1]["hex"], True)
-        self.nodes[1].sendrawtransaction(txns_to_send[2]["hex"], True)
+        # Restart the node with the generated address as the miner address
+        args = [ZebraExtraArgs(miner_address=transparent_address)]
+        self.nodes = start_nodes(self.num_nodes, self.options.tmpdir, args)
 
-        # Have node1 mine a block to confirm transactions:
-        self.sync_all()
-        self.nodes[1].generate(1)
-        self.sync_all()
+        # Restart the wallet
+        self.wallets = start_wallets(self.num_nodes, self.options.tmpdir)
 
-        assert_equal(Decimal(self.nodes[0].getbalance()), Decimal('0'))
-        assert_equal(Decimal(self.nodes[2].getbalance()), Decimal('50') - 3*fee)
-        assert_equal(Decimal(self.nodes[0].getbalance("*")), Decimal('0'))
-        assert_equal(Decimal(self.nodes[2].getbalance("*")), Decimal('50') - 3*fee)
+        # TODO: Use getwalletinfo when implemented
+        # https://github.com/zcash/wallet/issues/55
 
-        # Send 10 ZEC normally
-        address = self.nodes[0].getnewaddress("")
-        self.nodes[2].settxfee(Decimal('0.001'))  # not the default
-        self.nodes[2].sendtoaddress(address, Decimal('10'), "", "", False)
-        self.sync_all()
-        self.nodes[2].generate(1)
-        self.sync_all()
-        assert_equal(Decimal(self.nodes[2].getbalance()), Decimal('39.99900000') - 3*fee)
-        assert_equal(Decimal(self.nodes[0].getbalance()), Decimal('10.00000000'))
-        assert_equal(Decimal(self.nodes[2].getbalance("*")), Decimal('39.99900000') - 3*fee)
-        assert_equal(Decimal(self.nodes[0].getbalance("*")), Decimal('10.00000000'))
+        # No balance for the address in the node yet
+        node_balance = self.nodes[0].getaddressbalance(transparent_address)
+        assert_equal(node_balance['balance'], 0)
 
-        # Send 10 ZEC with subtract fee from amount
-        self.nodes[2].sendtoaddress(address, Decimal('10'), "", "", True)
-        self.sync_all()
-        self.nodes[2].generate(1)
-        self.sync_all()
-        assert_equal(Decimal(self.nodes[2].getbalance()), Decimal('29.99900000') - 3*fee)
-        assert_equal(Decimal(self.nodes[0].getbalance()), Decimal('19.99900000'))
-        assert_equal(Decimal(self.nodes[2].getbalance("*")), Decimal('29.99900000') - 3*fee)
-        assert_equal(Decimal(self.nodes[0].getbalance("*")), Decimal('19.99900000'))
+        # No balance for the address in the wallet either
+        wallet_balance = self.wallets[0].z_gettotalbalance(1, True)
+        # TODO: Result is a string (https://github.com/zcash/wallet/issues/15)
+        assert_equal(wallet_balance['transparent'], '0.00000000')
 
-        # Sendmany 10 ZEC
-        self.nodes[2].sendmany("", {address: Decimal('10')}, 0, "", [])
-        self.sync_all()
-        self.nodes[2].generate(1)
-        self.sync_all()
-        assert_equal(Decimal(self.nodes[2].getbalance()), Decimal('19.99800000') - 3*fee)
-        assert_equal(Decimal(self.nodes[0].getbalance()), Decimal('29.99900000'))
-        assert_equal(Decimal(self.nodes[2].getbalance("*")), Decimal('19.99800000') - 3*fee)
-        assert_equal(Decimal(self.nodes[0].getbalance("*")), Decimal('29.99900000'))
-
-        # Sendmany 10 ZEC with subtract fee from amount
-        self.nodes[2].sendmany("", {address: Decimal('10')}, 0, "", [address])
-        self.sync_all()
-        self.nodes[2].generate(1)
-        self.sync_all()
-        assert_equal(Decimal(self.nodes[2].getbalance()), Decimal('9.99800000') - 3*fee)
-        assert_equal(Decimal(self.nodes[0].getbalance()), Decimal('39.99800000'))
-        assert_equal(Decimal(self.nodes[2].getbalance("*")), Decimal('9.99800000') - 3*fee)
-        assert_equal(Decimal(self.nodes[0].getbalance("*")), Decimal('39.99800000'))
-
-        # Test ResendWalletTransactions:
-        # Create a couple of transactions, then start up a fourth
-        # node (nodes[3]) and ask nodes[0] to rebroadcast.
-        # EXPECT: nodes[3] should have those transactions in its mempool.
-        txid1 = self.nodes[0].sendtoaddress(self.nodes[1].getnewaddress(), 1)
-        txid2 = self.nodes[1].sendtoaddress(self.nodes[0].getnewaddress(), 1)
-        sync_mempools(self.nodes)
-
-        self.nodes.append(start_node(3, self.options.tmpdir))
-        connect_nodes_bi(self.nodes, 0, 3)
-        sync_blocks(self.nodes)
-
-        relayed = self.nodes[0].resendwallettransactions()
-        assert_equal(set(relayed), set([txid1, txid2]))
-        sync_mempools(self.nodes)
-
-        assert(txid1 in self.nodes[3].getrawmempool())
-
-        # check integer balances from getbalance
-        assert_equal(Decimal(self.nodes[2].getbalance("*", 1, False, True)), 999800000 - 3*fee*COIN)
-
-        # send from node 0 to node 2 taddr
-        mytaddr = self.nodes[2].getnewaddress()
-        mytxid = self.nodes[0].sendtoaddress(mytaddr, Decimal('10.0'))
-        self.sync_all()
+        # Mine a block
         self.nodes[0].generate(1)
-        self.sync_all()
 
-        mybalance = Decimal(self.nodes[2].z_getbalance(mytaddr))
-        assert_equal(mybalance, Decimal('10.0'))
+        # Wait for the wallet to sync
+        time.sleep(1)
 
-        # check integer balances from z_getbalance
-        assert_equal(self.nodes[2].z_getbalance(mytaddr, 1, True), 1000000000)
+        # Balance for the address increases in the node
+        node_balance = self.nodes[0].getaddressbalance(transparent_address)
+        assert_equal(node_balance['balance'], 625000000)
 
-        mytxdetails = self.nodes[2].getrawtransaction(mytxid, 1)
-        myvjoinsplits = mytxdetails["vjoinsplit"]
-        assert_equal(0, len(myvjoinsplits))
-        assert("joinSplitPubKey" not in mytxdetails)
-        assert("joinSplitSig" not in mytxdetails)
+        # Mine another block
+        self.nodes[0].generate(1)
+
+        # Wait for the wallet to sync
+        time.sleep(1)
+
+        node_balance = self.nodes[0].getaddressbalance(transparent_address)
+        assert_equal(node_balance['balance'], 1250000000)
+
+        # There are 2 transactions in the wallet
+        assert_equal(len(self.wallets[0].z_listtransactions()), 2)
+
+        # Confirmed balance in the wallet is either 6.25 or 12.5 ZEC
+        wallet_balance = self.wallets[0].z_gettotalbalance(1, True)
+        assert_true(
+            wallet_balance['transparent'] == '6.25000000' or
+            wallet_balance['transparent'] == '12.50000000')
 
 if __name__ == '__main__':
     WalletTest ().main ()
